@@ -160,6 +160,37 @@ litParser = ((Lit . LBool) <$> ((True <$ symbol "true") <|> (False <$ symbol "fa
 typeExpression :: Exp -> Type
 typeExpression = undefined
 
+-- I don't know better way for now, FIXME: think of smth better
+
+-- hm, maybe don't need the labels if go recursive
+-- last constrain, one but last - assigned type
+data LExp = LExp Exp [LExp] Type [(Type, Type)]
+
+
+--
+assignLabels :: Exp -> LExp
+assignLabels e@(Lit (LInt _))    = LExp e [] TInt []
+assignLabels e@(Lit (LBool _))   = LExp e [] TBool []
+assignLabels e@(App e1 e2) =
+  undefined
+  where
+    (LExp _ _ t1 c1) = assignLabels e1
+    (LExp _ _ t2 c2) = assignLabels e2
+assignLabels e@(Lam name e1) =
+  undefined
+  where
+     (LExp _ _ t1 c1) = assignLabels e1
+assignLabels e@(Let name e1 e2) =
+  undefined
+  where
+    (LExp _ _ t1 c1) = assignLabels e1
+    (LExp _ _ t2 c2) = assignLabels e2
+
+-- Var Name
+--          | Lam Name Exp
+--          | App Exp Exp
+--          | Let Name Exp Exp -- let x = e1 in e2
+foo n f x = f (n f x)
 
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
