@@ -62,6 +62,8 @@ data Type = TVar String -- free variable
           | TFun Type Type
           deriving (Show, Eq)
 
+--------------------------------------------------------------------------------
+
 -- parser
 type Parser = Parsec Void String
 
@@ -109,12 +111,11 @@ exprParser' = appParser
 
 appParser :: Parser Exp
 appParser = do
-             appsOrExpr <- ((,) <$> exprParser <*> (many exprParser) )
+             appsOrExpr <- (,) <$> exprParser <*> many exprParser
              return $ case appsOrExpr of
                          (e1, []) -> e1
-                         (e1, xs) ->  (foldApp $ e1:xs)
-            where
-              foldApp = foldl1 (\a -> \r -> App a r)
+                         (e1, xs) ->  foldl1 App $ e1:xs
+
 --appParser = App <$> (exprParser) <*> exprParser
 
 
@@ -148,11 +149,17 @@ letParser = do
             return $ Let n e1 e2
 
 litParser :: Parser Exp
-litParser = ((Lit . LBool) <$> ((pure True <* symbol "true") <|> (pure False <* symbol "false")))
+litParser = ((Lit . LBool) <$> ((True <$ symbol "true") <|> (False <$ symbol "false")))
             <|> ((Lit . LInt) <$> integer)
 
 -- TODO: because of left factoring this is a bit ugly
 -- understand left-factoring better, plz
 -- FIXME: unit tests?
+--------------------------------------------------------------------------------
+
+typeExpression :: Exp -> Type
+typeExpression = undefined
+
+
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
