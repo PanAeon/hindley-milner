@@ -166,6 +166,13 @@ typeExpression = undefined
 -- last constrain, one but last - assigned type
 data LExp = LExp Exp [LExp] Type [(Type, Type)]
 
+-- TODO: general recursive scheme?
+data AExp = AVar Name Type
+         | ALam Name Exp Type
+         | AApp Exp Exp Type
+         | ALet Name Exp Exp Type -- let x = e1 in e2
+         | ALit Lit Type
+         deriving Show
 
 --
 assignLabels :: Exp -> LExp
