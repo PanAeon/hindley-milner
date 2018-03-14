@@ -4,10 +4,13 @@ module Lib
 
 import Control.Monad (void)
 import Data.Void
-import Text.Megaparsec
+import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import Text.Megaparsec.Expr
 import qualified Text.Megaparsec.Char.Lexer as L
+import Control.Monad.State
+import Data.Map(Map, (!))
+import qualified Data.Map.Lazy as M
 
 {- REFERENCES:
 1. Very intuitive explanation
@@ -155,7 +158,15 @@ litParser = ((Lit . LBool) <$> ((True <$ symbol "true") <|> (False <$ symbol "fa
 -- TODO: because of left factoring this is a bit ugly
 -- understand left-factoring better, plz
 -- FIXME: unit tests?
+
+-- parseTest lambdaParser "λn.λf.λx.f (n f x)"
 --------------------------------------------------------------------------------
+addS =  "\\n.\\f.\\x.f (n f x)"
+-- runState (assignLabels addL) 0
+stupdidParser x = maybe (error "can not parse") id  $ parseMaybe  lambdaParser x
+addL =  stupdidParser addS
+appL = stupdidParser "a b"
+
 
 typeExpression :: Exp -> Type
 typeExpression = undefined
@@ -168,36 +179,104 @@ data LExp = LExp Exp [LExp] Type [(Type, Type)]
 
 -- TODO: general recursive scheme?
 data AExp = AVar Name Type
-         | ALam Name Exp Type
-         | AApp Exp Exp Type
-         | ALet Name Exp Exp Type -- let x = e1 in e2
+         | ALam Name AExp Type
+         | AApp AExp AExp Type
+         | ALet Name AExp AExp Type -- let x = e1 in e2
          | ALit Lit Type
          deriving Show
 
---
-assignLabels :: Exp -> LExp
-assignLabels e@(Lit (LInt _))    = LExp e [] TInt []
-assignLabels e@(Lit (LBool _))   = LExp e [] TBool []
+type Constraint = (Type, Type)
+
+getType :: AExp -> Type
+getType (AVar _ t) = t
+getType (ALam _ _ t) = t
+getType (AApp _ _ t) = t
+getType (ALet _ _ _ t) = t
+getType (ALit _ t) = t
+
+freshTypeName :: State Int String
+freshTypeName = do
+                 i <- get
+                 put (i+1)
+                 pure $ "t" ++ if i == 0 then "" else show i
+
+assignLabels :: Exp -> State Int (AExp, Map Name Type, [Constraint])
 assignLabels e@(App e1 e2) =
-  undefined
-  where
-    (LExp _ _ t1 c1) = assignLabels e1
-    (LExp _ _ t2 c2) = assignLabels e2
+  do
+    (e1', m1, c1) <- assignLabels e1
+    (e2', m2, c2) <- assignLabels e2
+    tname <- freshTypeName -- FIXME: should I generate the new type or reuse type of (result) e1?
+    let m' = M.union m1 m2
+        t1 = getType e1'
+        t2 = getType e2'
+        t' = TVar tname
+        e' = AApp e1' e2' t'
+        c' = [ (t1, TFun t2 t')
+             ] ++ c1 ++ c2 -- FIXME: faster merge?
+    pure (e', m', c')
+
+
+
+
 assignLabels e@(Lam name e1) =
-  undefined
-  where
-     (LExp _ _ t1 c1) = assignLabels e1
-assignLabels e@(Let name e1 e2) =
-  undefined
-  where
-    (LExp _ _ t1 c1) = assignLabels e1
-    (LExp _ _ t2 c2) = assignLabels e2
+  do
+    (e1', m1, c1) <- assignLabels e1
+    tname <- freshTypeName -- FIXME: and here should I reuse the result of e1?
+    tx    <- if M.member name m1
+             then pure $  m1 ! name
+             else TVar <$> freshTypeName
+    let m' = M.delete name m1
+        t1 = getType e1'
+        t' = TVar tname
+        e' = ALam name e1' t'
+
+        c' = [ (t', TFun tx t1) -- FIXME: is this right _squint_ , seems to be so
+             ] ++ c1
+    {-
+      constraints:
+      tname => X -> Y
+      if M contains name then .. ....
+    -}
+    pure (e', m', c')
+assignLabels e@(Var name) =
+  (\tname ->
+    let
+    t' = TVar tname
+    e' = AVar name t'
+    in (e', M.singleton name t', [])
+  ) <$> freshTypeName
+
+
+
+
+--
+-- assignLabels :: Exp -> LExp
+-- assignLabels e@(Lit (LInt _))    = LExp e [] TInt []
+-- assignLabels e@(Lit (LBool _))   = LExp e [] TBool []
+-- assignLabels e@(App e1 e2) =
+--   undefined
+--   where
+--     (LExp _ _ t1 c1) = assignLabels e1
+--     (LExp _ _ t2 c2) = assignLabels e2
+-- assignLabels e@(Lam name e1) =
+--   undefined
+--   where
+--      (LExp _ _ t1 c1) = assignLabels e1
+-- assignLabels e@(Let name e1 e2) =
+--   undefined
+--   where
+--     (LExp _ _ t1 c1) = assignLabels e1
+--     (LExp _ _ t2 c2) = assignLabels e2
 
 -- Var Name
 --          | Lam Name Exp
 --          | App Exp Exp
 --          | Let Name Exp Exp -- let x = e1 in e2
 foo n f x = f (n f x)
+bar n = z
+  where
+    z =  \f x -> f (n f x)
 
+baz a b = a b
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
