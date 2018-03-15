@@ -11,6 +11,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Control.Monad.State
 import Data.Map(Map, (!))
 import qualified Data.Map.Lazy as M
+import Data.Maybe(maybeToList)
 
 {- REFERENCES:
 1. Very intuitive explanation
@@ -63,7 +64,7 @@ data Type = TVar String -- free variable
           | TInt
           | TBool
           | TFun Type Type
-          deriving (Show, Eq)
+          deriving (Show, Eq, Ord)
 
 --------------------------------------------------------------------------------
 
@@ -165,7 +166,8 @@ addS =  "\\n.\\f.\\x.f (n f x)"
 -- runState (assignLabels addL) 0
 stupdidParser x = maybe (error "can not parse") id  $ parseMaybe  lambdaParser x
 addL =  stupdidParser addS
-appL = stupdidParser "a b"
+appL = stupdidParser "\\a.\\b.a b"
+appL' = stupdidParser "\\a.\\b.b a"
 
 
 typeExpression :: Exp -> Type
@@ -194,60 +196,100 @@ getType (AApp _ _ t) = t
 getType (ALet _ _ _ t) = t
 getType (ALit _ t) = t
 
-freshTypeName :: State Int String
+
+
+freshTypeName :: State (Int, Map String Type) String
 freshTypeName = do
-                 i <- get
-                 put (i+1)
+                 (i, m) <- get
+                 put ((i+1), m)
                  pure $ "t" ++ if i == 0 then "" else show i
 
-assignLabels :: Exp -> State Int (AExp, Map Name Type, [Constraint])
+assignLabels :: Exp -> State (Int, Map Name Type) (AExp, [Constraint])
 assignLabels e@(App e1 e2) =
   do
-    (e1', m1, c1) <- assignLabels e1
-    (e2', m2, c2) <- assignLabels e2
+    (e1', c1) <- assignLabels e1
+    (e2', c2) <- assignLabels e2
     tname <- freshTypeName -- FIXME: should I generate the new type or reuse type of (result) e1?
-    let m' = M.union m1 m2
+    let
         t1 = getType e1'
         t2 = getType e2'
         t' = TVar tname
         e' = AApp e1' e2' t'
         c' = [ (t1, TFun t2 t')
              ] ++ c1 ++ c2 -- FIXME: faster merge?
-    pure (e', m', c')
+    pure (e', c')
 
 
 
 
 assignLabels e@(Lam name e1) =
   do
-    (e1', m1, c1) <- assignLabels e1
+    (e1', c1) <- assignLabels e1
+    (_, m) <- get
     tname <- freshTypeName -- FIXME: and here should I reuse the result of e1?
-    tx    <- if M.member name m1
-             then pure $  m1 ! name
+    tx    <- if M.member name m
+             then pure $  m ! name
              else TVar <$> freshTypeName
-    let m' = M.delete name m1
+    let m' = M.delete name m
         t1 = getType e1'
         t' = TVar tname
         e' = ALam name e1' t'
 
         c' = [ (t', TFun tx t1) -- FIXME: is this right _squint_ , seems to be so
              ] ++ c1
-    {-
-      constraints:
-      tname => X -> Y
-      if M contains name then .. ....
-    -}
-    pure (e', m', c')
+    (i, _) <- get
+    put (i, m') -- FIXME: fucking shame
+    pure (e',  c')
 assignLabels e@(Var name) =
-  (\tname ->
-    let
-    t' = TVar tname
-    e' = AVar name t'
-    in (e', M.singleton name t', [])
-  ) <$> freshTypeName
+  do
+  (_, m) <- get
+  if (M.member name m)
+  then let
+       t' = maybe undefined id (M.lookup name m)
+       e' = AVar name t'
+       in pure (e', [])
+  else do
+        tname <- freshTypeName
+        (i,m) <- get
+        let
+          t' = TVar tname
+          e' = AVar name t'
+        put (i, M.insert name t' m)
+        pure (e', [])
+
+-- FUCK: this shit works!!!
+-- FIXME: circular dependencies?
+-- solve constraints (how?)
+-- very basic just explode all functional types:
+solveConstraints :: [Constraint] -> Map Type Type
+solveConstraints xs = M.fromList xs'
+  where
+    m0 = M.fromList xs
+    expand t =  M.lookup t m0 >>= (\t' ->
+                 let
+                   (TFun ta tb) = t'
+                   ta' = maybe ta id (expand ta)
+                   tb' = maybe tb id (expand tb)
+                 in Just $ TFun ta' tb'
+               )
+    xs' = (fst <$> xs) >>= (\x ->
+                   (\t -> (x,t)) <$> (maybeToList $ expand x)
+                  )
+
+doSomeWork = pprint t'
+  where
+   e0 = stupdidParser "\\n.\\f.\\x. f (n f x)"
+   ((expr, xs), _) = runState (assignLabels e0) (0, M.empty)
+   constraints = solveConstraints xs
+   (ALam p b t) = expr
+   t' = maybe undefined id (M.lookup t constraints)
 
 
-
+-- FIXME: right associativeness!
+--- "((t1 -> t2) -> (t1 -> t2))" !!!
+pprint :: Type -> String
+pprint (TVar name) = name
+pprint (TFun a b) = "(" ++ pprint a ++ " -> " ++ pprint b ++ ")"
 
 --
 -- assignLabels :: Exp -> LExp
@@ -273,6 +315,7 @@ assignLabels e@(Var name) =
 --          | App Exp Exp
 --          | Let Name Exp Exp -- let x = e1 in e2
 foo n f x = f (n f x)
+foo' n f x = n f x
 bar n = z
   where
     z =  \f x -> f (n f x)
