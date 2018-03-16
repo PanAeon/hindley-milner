@@ -12,6 +12,7 @@ import Control.Monad.State
 import Data.Map(Map, (!))
 import qualified Data.Map.Lazy as M
 import Data.Maybe(maybeToList)
+import Debug.Trace
 
 {- REFERENCES:
 1. Very intuitive explanation
@@ -287,33 +288,14 @@ doSomeWork = pprint t'
 
 -- FIXME: right associativeness!
 --- "((t1 -> t2) -> (t1 -> t2))" !!!
+
+
 pprint :: Type -> String
 pprint (TVar name) = name
-pprint (TFun a b) = "(" ++ pprint a ++ " -> " ++ pprint b ++ ")"
+pprint (TFun tf@(TFun a' b') b) = "(" ++ pprint tf ++ ")" ++ " -> " ++ pprint b
+pprint (TFun a b) =  pprint a ++ " -> " ++ pprint b
 
---
--- assignLabels :: Exp -> LExp
--- assignLabels e@(Lit (LInt _))    = LExp e [] TInt []
--- assignLabels e@(Lit (LBool _))   = LExp e [] TBool []
--- assignLabels e@(App e1 e2) =
---   undefined
---   where
---     (LExp _ _ t1 c1) = assignLabels e1
---     (LExp _ _ t2 c2) = assignLabels e2
--- assignLabels e@(Lam name e1) =
---   undefined
---   where
---      (LExp _ _ t1 c1) = assignLabels e1
--- assignLabels e@(Let name e1 e2) =
---   undefined
---   where
---     (LExp _ _ t1 c1) = assignLabels e1
---     (LExp _ _ t2 c2) = assignLabels e2
 
--- Var Name
---          | Lam Name Exp
---          | App Exp Exp
---          | Let Name Exp Exp -- let x = e1 in e2
 foo n f x = f (n f x)
 foo' n f x = n f x
 bar n = z
