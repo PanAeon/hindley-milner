@@ -195,6 +195,7 @@ appL' = stupdidParser "\\a.\\b.b a"
 data LExp = LExp Exp [LExp] Type [(Type, Type)]
 
 -- TODO: general recursive scheme?
+-- FIXME: get rid of AExp ???
 data AExp = AVar Name Type
          | ALam Name AExp Type
          | AApp AExp AExp Type
@@ -251,7 +252,7 @@ assignLabels (Let name e1 e2) =
         t2 = getType e2'
         t' = TVar tname
         e' = ALet name e1' e2' t'
-        c' = [(t', t2),(tx, t1)] ++ c1 ++ c2
+        c' = [(tx, t1), (t', t2)] ++ c1 ++ c2 -- maybe the problem is with solver (e1 should be resolved before e2)
     (i, _) <- get
     put (i, m') -- FIXME: ugly, shadowing (or maybe not for lambda but not let...)
     pure (e', c')
@@ -447,7 +448,7 @@ solveConstraints' xs = M.fromList xs'
 --  \\f.\\a.(letrec v = \\.x f (v x) in v a) -- wow! right type, wrong expression
 doSomeWork = pprint $ normalizeTypeNames res
   where
-   e0 = stupdidParser "\\f.\\a.(letrec v = \\x.f (v x) in v a)"
+   e0 = stupdidParser "let f = \\x.x in \\g.g (f true) (f 0)"
    ((expr, xs), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr
