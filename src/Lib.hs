@@ -51,7 +51,8 @@ type Name = String
 data Exp = Var Name
          | Lam Name Exp
          | App Exp Exp
-         | Let Name Exp Exp -- let x = e1 in e2
+         | Let Name Exp Exp -- let x = e1 in e2; !! let polymorphism!!
+         | Letrec Name Exp Exp
          | Lit Lit
          deriving Show
 
@@ -100,7 +101,7 @@ rword :: String -> Parser ()
 rword w = lexeme (string w *> notFollowedBy alphaNumChar)
 
 rws :: [String] -- list of reserved words
-rws = ["true", "false", "let","in"] -- "if","then","else",
+rws = ["true", "false", "let","in", "letrec"] -- "if","then","else",
 
 identifier :: Parser String
 identifier = (lexeme . try) (p >>= check)
@@ -132,6 +133,7 @@ appParser = do
 exprParser :: Parser Exp
 exprParser =   varParser
              <|> lamParser
+             <|> letrecParser
              <|> letParser
              <|> litParser
              <|> parens exprParser'
@@ -156,6 +158,17 @@ letParser = do
             rword "in"
             e2 <- exprParser'
             return $ Let n e1 e2
+
+
+letrecParser :: Parser Exp
+letrecParser = do
+            rword "letrec" <* sc
+            n <- identifier
+            symbol "="
+            e1 <- exprParser'
+            rword "in"
+            e2 <- exprParser'
+            return $ Letrec n e1 e2
 
 litParser :: Parser Exp
 litParser = ((Lit . LBool) <$> ((True <$ symbol "true") <|> (False <$ symbol "false")))
@@ -186,6 +199,7 @@ data AExp = AVar Name Type
          | ALam Name AExp Type
          | AApp AExp AExp Type
          | ALet Name AExp AExp Type -- let x = e1 in e2
+         | ALetrec Name AExp AExp Type
          | ALit Lit Type
          deriving Show
 
@@ -197,6 +211,7 @@ getType (ALam _ _ t) = t
 getType (AApp _ _ t) = t
 getType (ALet _ _ _ t) = t
 getType (ALit _ t) = t
+getType (ALetrec _ _ _ t) = t
 
 
 
@@ -221,7 +236,7 @@ assignLabels e@(App e1 e2) =
              ] ++ c1 ++ c2 -- FIXME: faster merge?
     pure (e', c')
 
--- FIXME: variable shadowing !!!!
+-- FIXME: variable shadowing !!!! ??? yes, or no?
 assignLabels (Let name e1 e2) =
   do
     (e1', c1) <- assignLabels e1
@@ -236,6 +251,26 @@ assignLabels (Let name e1 e2) =
         t2 = getType e2'
         t' = TVar tname
         e' = ALet name e1' e2' t'
+        c' = [(t', t2),(tx, t1)] ++ c1 ++ c2
+    (i, _) <- get
+    put (i, m') -- FIXME: ugly, shadowing (or maybe not for lambda but not let...)
+    pure (e', c')
+
+--- letrec v = e1 in e2 === let v = fix(\v.e1) in e2
+assignLabels (Letrec name e1 e2) = -- FIXME: same as let?
+  do
+    (e1', c1) <- assignLabels e1 ---- aha, should check for e1
+    (e2', c2) <- assignLabels e2
+    (_, m) <- get
+    tname <- freshTypeName
+    tx <- if M.member name m -- if name in e2
+          then pure $ m ! name -- get it's name
+          else TVar <$> freshTypeName -- or assign new name
+    let m' = M.delete name m
+        t1 = getType e1'
+        t2 = getType e2'
+        t' = TVar tname
+        e' = ALetrec name e1' e2' t'
         c' = [(t', t2),(tx, t1)] ++ c1 ++ c2
     (i, _) <- get
     put (i, m') -- FIXME: ugly, shadowing (or maybe not for lambda but not let...)
@@ -285,10 +320,10 @@ getTypeVarName :: Type -> Int
 getTypeVarName (TVar i) = i
 getTypeVarName _ = error "getTypeVarName works only with TVar !"
 -- FUCK: this shit works!!!
--- FIXME: circular dependencies?
+-- FIXME: circular dependencies? -- check !! if so yield "can not construct infinite type"
 -- solve constraints (how?)
 -- very basic just explode all functional types:
--- FIXME: duplicates !!
+
 
 solveConstraints :: [Constraint] -> Type
 solveConstraints xs = let
@@ -398,10 +433,21 @@ solveConstraints' xs = M.fromList xs'
                   )
 
 
+-- "let app = \\f.\\x.f x in \\g.\\y. app g y"
+-- "letrec = \\x.v x in \\y.v y"
+-- "\\f.\\g.g (f true) (f 0)" works
+-- "let f = \x.x in \\g.g (f true) (f false)"
 -- \\g.\\x.\\f.g (f false) (f x)
+-- FIXME: let doesn't work in:
+-- "let f = \\x.x in \\g.g (f true) (f 0)"
+
+-- "letrec v = \\a.(v a) in v"
+-- \\f.\\a.(letrec v = v (f a) in v) -- wrong!!!!!!!!!!!!!!!!!!!
+
+--  \\f.\\a.(letrec v = \\.x f (v x) in v a) -- wow! right type, wrong expression
 doSomeWork = pprint $ normalizeTypeNames res
   where
-   e0 = stupdidParser "let app = \\f.\\x.f x in \\g.\\y. app g y"
+   e0 = stupdidParser "\\f.\\a.(letrec v = \\x.f (v x) in v a)"
    ((expr, xs), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr
@@ -452,6 +498,16 @@ foo' n f x = n f x
 baz a b = a b
 
 buz g f a b = g (f a) (f b)
+
+-- let v = \\a.(v a) in v
+-- \\f.\\a.(let v = v (f a) in v)
+buzz f a = f (f a)
+
+-- \\f.\\a.(letrec v = \\.x f (v x) in v a)
+
+buzz' f a = let
+             v = \x -> v (f x)
+            in v a
 
 --fuz f = f f -- cannot construct infinite type
 
