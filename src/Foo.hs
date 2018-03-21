@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Foo(quicksort) where
 
 import Data.List
@@ -54,3 +55,24 @@ minfree' xs = search v'
     v =  V.replicate n False
     xs' = (\x -> (x,True))<$> filter (<= n) xs
     v' = V.update v (V.fromList xs')
+
+-----------------------------------------------
+-- maximum surpaser
+-- looks odd, but probably correct, at least to O(n log n)
+maxSurpasser:: Ord a => [a] -> Int
+maxSurpasser xs = maximum (ys)
+  where
+    xs' = (\case {(j, (i, v)) -> (j,i,v)}) <$> (zip [0..] $ sortOn snd (zip [0..] xs))
+    l   = length xs'
+    xs'' = groupBy g xs'
+    g (_, _, v0) (_, _, v1) = v0 == v1
+    ys = h <$> xs''
+    h xs = let
+            (j, i, _) = head xs
+           in  l - j -i - (length xs)
+
+    -- l   = length xs'
+    -- f (vi,i) = l - vi - i - 1
+    -- ys' = groupBy (\a b -> )
+
+    -- ys  = <$> xs'
