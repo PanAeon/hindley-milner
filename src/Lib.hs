@@ -240,9 +240,15 @@ assignLabels e@(App e1 e2) =
     pure (e', c')
 
 -- FIXME: variable shadowing !!!! ??? yes, or no?
+-- FIXME: should be (lexically??) scoped.
 assignLabels (Let name e1 e2) =
   do
+    -- and now we know bound vars !!
+    --FIXME: (as if they can't be shadowed by inner scope?)
+    -- all right, lets postpone shadowing
+    bounded <-  M.elems <$> snd <$> get
     (e1', c1) <- assignLabels e1
+    allFreeVars <-  M.elems <$> snd <$> get
     (e2', c2) <- assignLabels e2
     (_, m) <- get
     tx    <- if M.member name m
@@ -252,8 +258,10 @@ assignLabels (Let name e1 e2) =
     let m' = M.delete name m
         t1 =  getType e1'
         t2 = getType e2'
+        notBound = allFreeVars \\ bounded
         -- tx' = TGen $ getTypeVarName $ t1
-        c1' = rewriteAsGen t1 c1
+        c1'   = rewriteNotBoundAsGen notBound c1
+        --c1' = rewriteAsGen t1 c1
         t' = TVar tname
         e' = ALet name e1' e2' t'
         c' = [(t1, tx), (t', t2)] ++ c1' ++ c2 -- maybe the problem is with solver (e1 should be resolved before e2)
@@ -283,12 +291,15 @@ assignLabels (Let name e1 e2) =
 
 assignLabels e@(Lam name e1) =
   do
+    tx <- TVar <$> freshTypeName
+    (i', m') <- get
+    put (i', M.insert name tx m')
     (e1', c1) <- assignLabels e1
     (_, m) <- get
     tname <- freshTypeName -- fresh type name is necessary
-    tx    <- if M.member name m
-             then pure $  m ! name
-             else TVar <$> freshTypeName
+    -- tx    <- if M.member name m
+    --          then pure $  m ! name
+    --          else TVar <$> freshTypeName
     let m' = M.delete name m
         t1 = getType e1'
         t' = TVar tname
@@ -318,6 +329,10 @@ assignLabels (Var name) =
 
 assignLabels (Lit (LInt i)) = pure (ALit (LInt i) TInt, [])
 assignLabels (Lit (LBool i)) = pure (ALit (LBool i) TBool, [])
+
+-- FIXME: looks like will not work
+rewriteNotBoundAsGen :: [Type] -> [Constraint] -> [Constraint]
+rewriteNotBoundAsGen xs cs = foldl (flip rewriteAsGen) cs xs
 
 
 rewriteAsGen :: Type -> [Constraint] -> [Constraint]
@@ -535,9 +550,12 @@ reconcile a b = error $ "Could not match :" ++ show a ++ " with " ++ show b
 
 --  \\f.\\a.(letrec v = \\.x f (v x) in v a) -- wow! right type, wrong expression
 -- "let f = \\x.x in \\g.g (f true) (f 0)" -- right, "(Bool -> Int -> t) -> t"
+
+-- FIXME: wrong, should fail!!!
+-- "\\h. (let f = \\x.h x in \\g.g (f true) (f 1))" -- wrong!
 doSomeWork = pprint $ normalizeTypeNames res
   where
-   e0 = stupdidParser "\\h. (let f = \\x.h x in \\g.g (f true) (f 1))"
+   e0 = stupdidParser "let f = \\x.x in \\g.g (f true) (f 0)"
    ((expr, xs), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr
