@@ -224,20 +224,21 @@ freshTypeName = do
                  put ((i+1), m)
                  pure i
 
-assignLabels :: Exp -> State (Int, Map Name Type) (AExp, [Constraint])
+assignLabels :: Exp -> State (Int, Map Name Type) (AExp, [Constraint], [Type])
 assignLabels e@(App e1 e2) =
   do
-    (e1', c1) <- assignLabels e1
-    (e2', c2) <- assignLabels e2
+    (e1', c1, v1) <- assignLabels e1
+    (e2', c2, v2) <- assignLabels e2
     tname <- freshTypeName -- FIXME: should I generate the new type or reuse type of (result) e1?
     let
         t1 = getType e1'
         t2 = getType e2'
         t' = TVar tname
         e' = AApp e1' e2' t'
+        v' = v1 ++ v2
         c' = [ (t1, TFun t2 t')
              ] ++ c1 ++ c2 -- FIXME: faster merge?
-    pure (e', c')
+    pure (e', c', v')
 
 -- FIXME: variable shadowing !!!! ??? yes, or no?
 -- FIXME: should be (lexically??) scoped.
@@ -247,9 +248,9 @@ assignLabels (Let name e1 e2) =
     --FIXME: (as if they can't be shadowed by inner scope?)
     -- all right, lets postpone shadowing
     bounded <-  M.elems <$> snd <$> get
-    (e1', c1) <- assignLabels e1
-    allFreeVars <-  M.elems <$> snd <$> get
-    (e2', c2) <- assignLabels e2
+    (e1', c1, v1) <- assignLabels e1
+    -- allFreeVars <-  M.elems <$> snd <$> get
+    (e2', c2, v2) <- assignLabels e2
     (_, m) <- get
     tx    <- if M.member name m
              then pure $  TVar $ getTypeVarName $ m ! name
@@ -258,16 +259,16 @@ assignLabels (Let name e1 e2) =
     let m' = M.delete name m
         t1 =  getType e1'
         t2 = getType e2'
-        notBound = allFreeVars \\ bounded
+        notBound = v1 \\ bounded --allFreeVars \\ bounded
         -- tx' = TGen $ getTypeVarName $ t1
-        c1'   = rewriteNotBoundAsGen notBound c1
+        c1'   = traceShow notBound $ rewriteNotBoundAsGen notBound c1
         --c1' = rewriteAsGen t1 c1
         t' = TVar tname
         e' = ALet name e1' e2' t'
         c' = [(t1, tx), (t', t2)] ++ c1' ++ c2 -- maybe the problem is with solver (e1 should be resolved before e2)
     (i, _) <- get
     put (i, m') -- FIXME: ugly, shadowing (or maybe not for lambda but not let...)
-    pure (e', c')
+    pure (e', c', v1 ++ v2)
 
 --- letrec v = e1 in e2 === let v = fix(\v.e1) in e2
 -- assignLabels (Letrec name e1 e2) = -- FIXME: same as let?
@@ -294,7 +295,7 @@ assignLabels e@(Lam name e1) =
     tx <- TVar <$> freshTypeName
     (i', m') <- get
     put (i', M.insert name tx m')
-    (e1', c1) <- assignLabels e1
+    (e1', c1, v1) <- assignLabels e1
     (_, m) <- get
     tname <- freshTypeName -- fresh type name is necessary
     -- tx    <- if M.member name m
@@ -309,7 +310,7 @@ assignLabels e@(Lam name e1) =
              ] ++ c1
     (i, _) <- get
     put (i, m') -- FIXME: fucking shame
-    pure (e',  c')
+    pure (e',  c', tx:v1)
 assignLabels (Var name) =
   do
   (_, m) <- get
@@ -317,7 +318,7 @@ assignLabels (Var name) =
   then let
        t' = maybe undefined id (M.lookup name m)
        e' = AVar name t'
-       in pure (e', [])
+       in pure (e', [], [])
   else do
         tname <- freshTypeName
         (i,m) <- get
@@ -325,22 +326,21 @@ assignLabels (Var name) =
           t' = TVar tname
           e' = AVar name t'
         put (i, M.insert name t' m)
-        pure (e', [])
+        pure (e', [], [])
 
-assignLabels (Lit (LInt i)) = pure (ALit (LInt i) TInt, [])
-assignLabels (Lit (LBool i)) = pure (ALit (LBool i) TBool, [])
+assignLabels (Lit (LInt i)) = pure (ALit (LInt i) TInt, [], [])
+assignLabels (Lit (LBool i)) = pure (ALit (LBool i) TBool, [], [])
 
 -- FIXME: looks like will not work
 rewriteNotBoundAsGen :: [Type] -> [Constraint] -> [Constraint]
-rewriteNotBoundAsGen xs cs = foldl (flip rewriteAsGen) cs xs
+rewriteNotBoundAsGen ts = fmap (\cs -> (fst cs, rewriteNotBoundAsGen' ts (snd cs)))
+
+rewriteNotBoundAsGen' :: [Type] -> Type -> Type
+rewriteNotBoundAsGen' ts (TFun a b) = TFun (rewriteNotBoundAsGen' ts a) (rewriteNotBoundAsGen' ts b)
+rewriteNotBoundAsGen' ts t@(TVar i) | elem t ts = TGen i
+rewriteNotBoundAsGen' _  x                      = x
 
 
-rewriteAsGen :: Type -> [Constraint] -> [Constraint]
-rewriteAsGen t@(TVar i) = fmap f
-   where
-     f (t1, t2) | t1 == t = (TGen i, t2)
-     f c                  = c
-rewriteAsGen _ = error "Could not rewrite other value but TVar"
 
 
 getTypeVarName :: Type -> Int
@@ -349,7 +349,7 @@ getTypeVarName (TGen i) = i
 getTypeVarName _ = error "getTypeVarName works only with TVar/TGen !"
 -- FUCK: this shit works!!!
 -- FIXME: circular dependencies? -- check !! if so yield "can not construct infinite type"
--- solve constraints (how?)
+
 -- very basic just explode all functional types:
 
 
@@ -361,15 +361,6 @@ solveConstraints xs = let
                          else solveConstraints xs'
 
 
-solveGenConstraints:: [Int] -> [Constraint] -> [Constraint]
-solveGenConstraints ns xs = foo (length fs) cs
-   where
-     (fs, rs) = partition (\x ->   elem (getTypeVarName $ fst x) ns) xs -- (isTGen (fst x)) &&
-     cs = fs ++ rs
-     foo 0 xs = xs
-     foo n xs = let
-                  (_, _, xs') = solveSingleConstraint xs
-                in foo (n-1) xs'
 
 
 
@@ -390,31 +381,22 @@ traceConstraints marker cs rest = trace y rest
      f (TGen i, t) = "g" ++ show i ++ " :: " ++ pprint t
      y = marker ++ ": <" ++ ((intersperse "; " cs'') >>= id) ++ ">"
 
-headTrace :: String -> [a] -> a
-headTrace marker xs = if null xs
-               then error ("Empty list at: " ++ marker)
-               else head xs
+
 
 solveSingleConstraint :: [Constraint] -> (Type, Type, [Constraint])
 solveSingleConstraint xs =   (ty, tr, cs' ++ ys')
   where
     zs = traceConstraints "solveSingleConstraint" xs $ groupBy (\a b -> getTypeVarName (fst a) == getTypeVarName (fst b)) $ sortOn (getTypeVarName . fst)   xs
-    y  = let
-           (gs,rs) = partition (isTGen . fst) (headTrace "solveSingle" zs)
-         in gs ++ rs
+    y  = head zs
     ys =  tail zs >>= id
 
 
-    (ty, tr, cs') = if isCTGen y
-                    then unifyGen (fst $ headTrace "y" y) (snd $ headTrace "y" y) (snd <$> (tail y))
-                    else unifySingle y
-    -- tr' = if isCTGen y
-    --       then replaceVarsWithTGen tr
-    --       else tr
+    (ty, tr, cs') = unifySingle y
+
     ys' = replaceType ys ty tr
     -- now replace ty with tr, + addd constraints , resort, merge, repeat
 
--- FIXME: replace unbound vars?
+
 replaceVarsWithTGen :: Type -> Type
 replaceVarsWithTGen (TVar x) = TGen x
 replaceVarsWithTGen (TFun a b) = TFun (replaceVarsWithTGen a) (replaceVarsWithTGen b)
@@ -446,32 +428,50 @@ isTPrim _     = False
 
 
 unifySingle :: [Constraint] -> (Type, Type, [Constraint])
-unifySingle (x:xs) =
-                       (fst x, resType, constraints)
+-- unifySingle (x:[]) = (fst x, snd x, [x]) -- FIXME: bug ... side-effecty
+unifySingle (x:xs) = (fst x, resType, constraints)
 
   where
-    -- tx = (trace $ "reconcile: " ++ show xs) $ fst $ head xs
     (resType, constraints) = foldl f (snd x, []) (snd <$> xs)
-    f (t0, cs) t1 = let
-                     (t, cs1) = reconcile t0 t1
-                    in (t, cs ++ cs1)
+    f (t, cs) t1 = let
+                     (t', cs') = reconcile t t1 -- and solve against free vars ...
+                     cs'' = solveGenConstraints  cs'
+                    in (t', cs ++ cs'')
 
-unifyGen :: Type -> Type -> [Type] -> (Type, Type, [Constraint])
-unifyGen tid tbody cs = (tid, tbody, constraints)
-  where
-    constraints =  foldl f ([]) (cs)
-    freeVars = getFreeVars tbody
-    freeNames = getTypeVarName <$> freeVars
-    f cs t1 = let
-                     (_, cs') = reconcile tbody t1
-                     -- solve against free vars in tgen, then all leftover
-                     cs'' = solveGenConstraints freeNames cs'
 
-                     cs''' = {-filter (\x -> notElem (getTypeVarName (fst x)) freeNames)-} (foo <$> cs'')
-                     foo (TVar x, y) = (TGen x, y)
+solveGenConstraints:: [Constraint] -> [Constraint]
+solveGenConstraints xs =    res
+   where
+     (fs, rs) = partition (\x -> isTGen (fst x)) xs
+     ns = fmap (getTypeVarName . fst) fs
+     fs' = replaceGenWithVar ns fs
+     cs = fs' ++ rs
+     res = replaceVarWithGen ns $ foo cs --fuck
+     -- foo xs = xs
+     foo xs = if any (\c -> elem (getTypeVarName (fst c)) ns) xs
+              then let
+                     (_, _, xs') =  solveSingleConstraint ( xs)
+                   in foo  xs'
+              else xs
 
-                    -- cs''' = (\x -> (fst x, generifyFreeVars freeNames (snd x))) <$> cs''
-                    in  ( cs''' ++ cs)
+
+replaceVarWithGen :: [Int] -> [Constraint] -> [Constraint]
+replaceVarWithGen ts = fmap (\cs -> (replaceVarWithGen' ts (fst cs), replaceVarWithGen' ts (snd cs)))
+
+replaceVarWithGen' :: [Int] -> Type -> Type
+replaceVarWithGen' ts (TFun a b) = TFun (replaceVarWithGen' ts a) (replaceVarWithGen' ts b)
+replaceVarWithGen' ts (TVar i) | elem i ts = TGen i
+replaceVarWithGen' _  x                      = x
+
+replaceGenWithVar :: [Int] -> [Constraint] -> [Constraint]
+replaceGenWithVar ts = fmap (\cs -> (replaceGenWithVar' ts (fst cs), replaceGenWithVar' ts (snd cs)))
+
+replaceGenWithVar' :: [Int] -> Type -> Type
+replaceGenWithVar' ts (TFun a b) = TFun (replaceGenWithVar' ts a) (replaceGenWithVar' ts b)
+replaceGenWithVar' ts (TGen i) | elem i ts = TVar i
+replaceGenWithVar' _  x                      = x
+
+
 
 
 getFreeVars :: Type -> [Type]
@@ -520,7 +520,11 @@ reconcile (TFun a b) (TFun c d) = let
                                     (a1, c1) = reconcile a c
                                     (b1, c2) = reconcile b d
                                   in (TFun a1 b1, c1 ++ c2)
--- reconcile (TGen a) b = genericReconcile (TGen a) b
+reconcile (TGen i) (TGen j) | i == j = (TGen i, [])
+                            | otherwise = (TGen i, [(TGen j, TGen i)])
+
+reconcile (TGen i) t2  = (TGen i, [(TGen i, t2)])
+reconcile t2 (TGen i)  = (TGen i, [(TGen i, t2)])
 reconcile (TVar i) (TVar j) | i == j = (TVar i, [])
                             | otherwise = (TVar i, [(TVar j, TVar i)])
 reconcile (TVar i) t2 = (TVar i ,[(TVar i, t2)])
@@ -528,12 +532,6 @@ reconcile t2 (TVar i) = (TVar i ,[(TVar i, t2)])
 reconcile TInt TInt = (TInt, [])
 reconcile TBool TBool = (TBool, [])
 reconcile a b = error $ "Could not match :" ++ show a ++ " with " ++ show b
-
--- genericReconcile :: Type -> Type -> (Type, [Constraint])
--- genericReconcile t0 t1 = (t0, cs)
---     where
-
-
 
 
 
@@ -554,9 +552,11 @@ reconcile a b = error $ "Could not match :" ++ show a ++ " with " ++ show b
 -- FIXME: wrong, should fail!!!
 -- "\\h. (let f = \\x.h x in \\g.g (f true) (f 1))" -- wrong!
 doSomeWork = pprint $ normalizeTypeNames res
-  where
-   e0 = stupdidParser "let f = \\x.x in \\g.g (f true) (f 0)"
-   ((expr, xs), _) = runState (assignLabels e0) (0, M.empty)
+  where -------- fuck, it just replaced h with g
+        -- can we check that output doesn't contains any g's?
+        -- add check that concrete != abstract?
+   e0 = stupdidParser "\\h. (let f = \\x.h x in \\g.g (f true) (h 1) (h true))"--"let f = \\x.x in \\g.g (f true) (f 0)"
+   ((expr, xs, _), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr
    -- t' = maybe undefined id (M.lookup t constraints)
@@ -569,6 +569,7 @@ doSomeWork = pprint $ normalizeTypeNames res
 
 
 pprint :: Type -> String
+pprint (TGen name) = "g" ++ if name == 0 then "" else show name
 pprint (TVar name) = "t" ++ if name == 0 then "" else show name
 pprint (TFun tf@(TFun a' b') b) = "(" ++ pprint tf ++ ")" ++ " -> " ++ pprint b
 pprint (TFun a b) =  pprint a ++ " -> " ++ pprint b
@@ -594,6 +595,7 @@ getTypeVarNames = nub . getTypeVarNames'
 -- FIXME: fold?
 getTypeVarNames' :: Type -> [Int]
 getTypeVarNames' (TVar i) = [i]
+getTypeVarNames' (TGen i) = [i]
 getTypeVarNames' TInt = []
 getTypeVarNames' TBool = []
 getTypeVarNames' (TFun a b) = getTypeVarNames a ++ getTypeVarNames b
