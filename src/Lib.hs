@@ -444,7 +444,6 @@ reconcile a b = error $ "Could not match :" ++ show a ++ " with " ++ show b
 -- "\\f.\\g.g (f true) (f 0)" works
 -- "let f = \x.x in \\g.g (f true) (f false)"
 -- \\g.\\x.\\f.g (f false) (f x)
--- FIXME: let doesn't work in:
 -- "let f = \\x.x in \\g.g (f true) (f 0)"
 
 -- "letrec v = \\a.(v a) in v"
@@ -459,7 +458,10 @@ doSomeWork = pprint $ normalizeTypeNames res
   where -------- fuck, it just replaced h with g
         -- can we check that output doesn't contains any g's?
         -- add check that concrete != abstract?
-   e0 = stupdidParser "let app = \\f.\\x.f x in \\g.\\y. app g y"--"let f = \\x.x in \\g.g (f true) (f 0)"
+        -- "let if = \\c.\\a.\\b.a in (let eq = \\a.\\b.false in (let mul = \\a.\\b.a in (let sub = \\a.\\b.a in (letrec f = \\n. if (eq n 0) 1 (mul n (f (sub n 1))) in f 3))))"
+        -- "\\if.\\eq.\\mul.\\sub.(letrec f = \\n. if (eq n 0) 1 (mul n (f (sub n 1))) in f 3)"
+        -- ???
+   e0 = stupdidParser "letrec f = \\n. f n in f 3"--"let f = \\x.x in \\g.g (f true) (f 0)"
    ((expr, xs, _), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr
