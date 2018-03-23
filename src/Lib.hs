@@ -43,8 +43,6 @@ import Data.List
 
 -}
 
--- TODO: https://github.com/ollef/Earley
-
 -- lambda calculus syntax
 
 type Name = String
@@ -126,8 +124,6 @@ appParser = do
              return $ case appsOrExpr of
                          (e1, []) -> e1
                          (e1, xs) ->  foldl1 App $ e1:xs
-
---appParser = App <$> (exprParser) <*> exprParser
 
 
 
@@ -229,7 +225,7 @@ assignLabels e@(App e1 e2) =
 --"\\h. (let f = \\x.h x in  (f true) )"
 assignLabels (Let name e1 e2) =
   do
-    let e = replaceAllOccurrencesWithFreshNames name e1 e2
+    let e = replaceExpression name e1 e2
     (_, m) <- get
     (pabeda, cx, vx) <- assignLabels e
     tname <- freshTypeName
@@ -244,7 +240,7 @@ assignLabels (Let name e1 e2) =
 assignLabels (Letrec name e1 e2) =
   do -- ha! what is the type of name in e1?
      -- below won't work?
-    let e = replaceAllOccurrencesWithFreshNames name e1 e2
+    let e = replaceExpression name e1 e2
     (_, m) <- get
     (pabeda, cx, vx) <- assignLabels e
     tname <- freshTypeName
@@ -299,19 +295,19 @@ assignLabels (Lit (LBool i)) = pure (TBool, [], [])
 -- again, what to do with shadowing? (TBD)
 
 
-replaceAllOccurrencesWithFreshNames :: String -> Exp -> Exp -> Exp
-replaceAllOccurrencesWithFreshNames name e1 (Lam n' b) = if n' == name
+replaceExpression :: String -> Exp -> Exp -> Exp
+replaceExpression name e1 (Lam n' b) = if n' == name
                                                          then (Lam n' b)
-                                                         else (Lam n' (replaceAllOccurrencesWithFreshNames name e1 b))
-replaceAllOccurrencesWithFreshNames name e1 (App a b) = App (replaceAllOccurrencesWithFreshNames name e1 a) (replaceAllOccurrencesWithFreshNames name e1 b)
-replaceAllOccurrencesWithFreshNames name e1 (Let n' a b) = Let n' (replaceAllOccurrencesWithFreshNames name e1 a) (if n' == name
+                                                         else (Lam n' (replaceExpression name e1 b))
+replaceExpression name e1 (App a b) = App (replaceExpression name e1 a) (replaceExpression name e1 b)
+replaceExpression name e1 (Let n' a b) = Let n' (replaceExpression name e1 a) (if n' == name
                                                            then b
-                                                           else (replaceAllOccurrencesWithFreshNames name e1 b))
-replaceAllOccurrencesWithFreshNames name e1 (Letrec n' a b) = if n' == name
+                                                           else (replaceExpression name e1 b))
+replaceExpression name e1 (Letrec n' a b) = if n' == name
                                                               then (Letrec n' a b)
-                                                              else (Letrec n' (replaceAllOccurrencesWithFreshNames name e1 a) (replaceAllOccurrencesWithFreshNames name e1 b))
-replaceAllOccurrencesWithFreshNames name e1 (Lit x) = Lit x
-replaceAllOccurrencesWithFreshNames name e1 (Var x) = if x == name
+                                                              else (Letrec n' (replaceExpression name e1 a) (replaceExpression name e1 b))
+replaceExpression name e1 (Lit x) = Lit x
+replaceExpression name e1 (Var x) = if x == name
                                                       then e1
                                                       else (Var x)
 
@@ -325,7 +321,6 @@ getTypeVarName _ = error "getTypeVarName works only with TVar !"
 -- FUCK: this shit works!!!
 -- FIXME: circular dependencies? -- check !! if so yield "can not construct infinite type"
 
--- very basic just explode all functional types:
 
 
 solveConstraints :: [Constraint] -> Type
@@ -334,11 +329,6 @@ solveConstraints xs = let
                        in if null xs'
                           then  b
                           else solveConstraints xs'
-
-
-
-
-
 
 
 
@@ -362,14 +352,6 @@ solveSingleConstraint xs =
                              (ty, tr, cs') = unifySingle y
                              ys' = replaceType ys ty tr
                            in (ty, tr, cs' ++ ys')
-
-
-
-
-
-
-
-    -- now replace ty with tr, + addd constraints , resort, merge, repeat
 
 
 
@@ -461,7 +443,7 @@ doSomeWork = pprint $ normalizeTypeNames res
         -- "let if = \\c.\\a.\\b.a in (let eq = \\a.\\b.false in (let mul = \\a.\\b.a in (let sub = \\a.\\b.a in (letrec f = \\n. if (eq n 0) 1 (mul n (f (sub n 1))) in f 3))))"
         -- "\\if.\\eq.\\mul.\\sub.(letrec f = \\n. if (eq n 0) 1 (mul n (f (sub n 1))) in f 3)"
         -- ???
-   e0 = stupdidParser "letrec f = \\n. f n in f 3"--"let f = \\x.x in \\g.g (f true) (f 0)"
+   e0 = stupdidParser "let f = \\x.x in \\g.g (f true) (f 0)"--"let f = \\x.x in \\g.g (f true) (f 0)"
    ((expr, xs, _), _) = runState (assignLabels e0) (0, M.empty)
    res = solveConstraints xs
    -- (ALam p b t) = expr

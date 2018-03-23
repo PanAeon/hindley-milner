@@ -71,8 +71,10 @@ maxSurpasser xs = maximum (ys)
             (j, i, _) = head xs
            in  l - j -i - (length xs)
 
-    -- l   = length xs'
-    -- f (vi,i) = l - vi - i - 1
-    -- ys' = groupBy (\a b -> )
+msc :: Ord a => [a] -> Int
+msc xs = maximum [scount z zs | z:zs <- tails' xs]
 
-    -- ys  = <$> xs'
+scount z zs = length $ filter (>z) zs
+
+tails' [] = []
+tails' (x:xs) = (x:xs) : tails xs
