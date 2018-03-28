@@ -78,3 +78,32 @@ scount z zs = length $ filter (>z) zs
 
 tails' [] = []
 tails' (x:xs) = (x:xs) : tails xs
+
+---------------------------------
+table :: Ord a => [a] -> [(a,Int)]
+table [x] = [(x, 0)]
+table xs = join' (m - n) (table ys) (table zs)
+  where
+    m = length xs
+    n = m `div` 2
+    (ys, zs) = splitAt n xs
+  --sortOn fst [(z, scount z zs) | z:zs <- tails' xs]
+-- tails (xs ++ ys) = map (++ys) (tails xs) ++ tails ys
+{-
+table (xs ++ ys)
+= {definition}   [(z, scount z zs) | z:zs <- tails' (xs ++ ys)]
+= {d&c prop}    [(z, scount z zs) | z:zs <- map (++ys) (tails xs) ++ tails ys]
+= {distrib}    [(z, scount z zs + scount z ys) | z:zs <- tails xs] ++ [(z, scount z zs) | z:zs <- tails' ys]
+= {...}        [(z, c + scount z (map fst table ys)) | (z,c) <- table xs] ++ table ys
+-}
+
+-- FIXME: revisit this 
+join' 0 txs [] = txs
+join' n txs [] = error ("Foo! " ++ show n)
+join' n [] tys = tys
+join' n txs@((x,c):txs') tys@((y,d):tys')
+  | x < y = (x,c + n) : join' n txs' tys
+  | x >= y = (y,d): join' (n - 1) txs tys'
+
+-- join' txs tys = [(x, c + tcount x tys) | (x,c) <- txs] vv tys
+-- tcount z tys = length (dropWhile((z>=) . fst) tys)
